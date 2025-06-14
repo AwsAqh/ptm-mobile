@@ -119,10 +119,10 @@ A mobile application for image classification that connects to a local PyTorch s
 
 Here are some screenshots of the project:
 
-![Home](./screenshot/home.jpg)
-![Train new model](./screenshot/Train.jpg)
-![Browse models](./screenshot/Browse.jpg)
-![Classify image](./screenshot/classify.jpg)
+![Home](./screenshots/home.jpg)
+![Train new model](./screenshots/Train.jpg)
+![Browse models](./screenshots/Browse.jpg)
+![Classify image](./screenshots/classify.jpg)
 
 
 
