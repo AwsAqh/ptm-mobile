@@ -1,10 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { login } from '../api/auth';
+import { checkEmailExists, login } from '../api/auth';
 import Notification from '../components/Notification';
 import { colors } from '../styles/them';
-
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -42,7 +41,9 @@ export default function LoginScreen({ navigation }) {
 
     // Your actual login logic
     try {
+      
       const data = await login({ email, password });
+     
       if (data.token) {
         await AsyncStorage.setItem('token', data.token);
         navigation.navigate('Home');
@@ -66,6 +67,38 @@ export default function LoginScreen({ navigation }) {
       setLoading(false);
     }
   };
+
+  const handleForgotPassword=async()=>{
+
+    if(email===''){
+      setNotification({
+        visible:true,
+        message:"please enter an email to reset the password",
+        type:"error"
+    
+      }) 
+      return;}
+
+      try{
+      const isEmailExists =await checkEmailExists(email)
+     
+      if (isEmailExists){
+        setNotification({visible:true,message:"Processing",type:"info"})
+        navigation.replace('ConfirmPin',{email})}
+      }
+      catch(err){
+        console.log(err.message)
+setNotification({visible:true,message:err.message,type:"error"})
+
+      }
+
+      
+
+
+    
+  }
+
+
 
   return (
     <View style={styles.container}>
@@ -97,6 +130,11 @@ export default function LoginScreen({ navigation }) {
       <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={loading}>
         <Text style={styles.buttonText}>{loading ? 'Logging in...' : 'Login'}</Text>
       </TouchableOpacity>
+
+      <TouchableOpacity style={styles.forgotButton} onPress={handleForgotPassword} disabled={loading}>
+        <Text style={styles.forgotText}>Forgot password</Text>
+      </TouchableOpacity>
+
       <TouchableOpacity onPress={() => navigation.navigate('Register')}>
         <Text style={styles.link}>Don't have an account? Register</Text>
       </TouchableOpacity>
@@ -137,6 +175,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
+ forgotButton: {
+  // remove any solid bg
+  backgroundColor: 'transparent',
+
+  padding: 15,
+  borderRadius: 8,
+  alignItems: 'center',
+  marginBottom: 16,
+
+  // outline styles
+  borderWidth: 1,               // <-- make the border visible
+  borderColor: 'antiquewhite',  // <-- your outline color
+},
+
   buttonText: {
     color: colors.text,
     fontSize: 16,
@@ -147,4 +199,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 10,
   },
+  forgotText:{
+    color:'antiquewhite',
+   
+  }
 });

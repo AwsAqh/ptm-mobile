@@ -8,4 +8,5 @@ export const colors = {
   accent: '#ff9800',
   error: '#dc3545',
   success: '#28a745',
+  secondyButton:'#f5f6fa'
 };

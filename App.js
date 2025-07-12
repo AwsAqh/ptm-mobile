@@ -7,11 +7,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 // Import your real screens
 import BrowseModelsScreen from './screens/BrowseModelsScreen';
 import ClassifyImageScreen from './screens/ClassifyImageScreen';
+import ConfirmPinScreen from './screens/ConfirmResetPin';
 import HomeScreen from './screens/HomeScreen';
 import IntroScreen from './screens/IntroScreen';
 import LoginScreen from './screens/LoginScreen';
 import ModelDetailsScreen from './screens/ModelDetailsScreen';
 import RegisterScreen from './screens/RegisterScreen';
+import ResetPasswordScreen from './screens/ResetPassword';
 import TrainNewModelScreen from './screens/TrainNewModelScreen';
 
 const Stack = createNativeStackNavigator();
@@ -24,6 +26,8 @@ export default function App() {
         <Stack.Navigator initialRouteName="Intro" screenOptions={{ headerShown: false }}>
           <Stack.Screen name="Intro" component={IntroScreen} />
           <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="ConfirmPin" component={ConfirmPinScreen} />
+          <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />
           <Stack.Screen name="Register" component={RegisterScreen} />
           <Stack.Screen name="Home" component={HomeScreen} />
           <Stack.Screen name="BrowseModels" component={BrowseModelsScreen} />

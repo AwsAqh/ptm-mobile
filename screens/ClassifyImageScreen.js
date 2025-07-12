@@ -1,7 +1,10 @@
+import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import React, { useEffect, useState } from 'react';
 import { Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { RPI_URL } from '../api/config';
 import { classifyImage, getModelClasses } from '../api/models';
+import LiveCameraView from '../components/LiveCameraView';
 import Notification from '../components/Notification';
 import { colors } from '../styles/them';
 
@@ -17,6 +20,7 @@ export default function ClassifyImageScreen({ route, navigation }) {
   const [loading, setLoading] = useState(false);
   const [notification, setNotification] = useState({ visible: false, message: '', type: 'info' });
   const [showSourceModal, setShowSourceModal] = useState(false);
+  const [showLiveCamera, setShowLiveCamera] = useState(false);
 
   useEffect(() => {
     const loadModelClasses = async () => {
@@ -92,12 +96,47 @@ export default function ClassifyImageScreen({ route, navigation }) {
   };
 
   const handleCaptureFromRaspberryPi = () => {
+    setShowSourceModal(false);
+    // Directly fetch from RPi instead of showing live camera
+    handleLiveCameraCaptureFromRPi();
+  };
+
+  const handleLiveCameraCaptureFromRPi = async () => {
+    setNotification({ visible: true, message: 'Capturing image from Raspberry Pi...', type: 'loading' });
+    try {
+      const response = await fetch(`${RPI_URL}/capture`);
+      if (!response.ok) throw new Error('Failed to capture image from Raspberry Pi');
+      const blob = await response.blob();
+      // Save blob to a file
+      const fileReaderInstance = new FileReader();
+      fileReaderInstance.readAsDataURL(blob);
+      fileReaderInstance.onload = async () => {
+        const base64data = fileReaderInstance.result.split(',')[1];
+        const fileUri = `${FileSystem.cacheDirectory}rpi_classify_${Date.now()}.jpg`;
+        await FileSystem.writeAsStringAsync(fileUri, base64data, { encoding: FileSystem.EncodingType.Base64 });
+        setSelectedImage(fileUri);
+        setClassificationResult(null);
+        setNotification({ visible: true, message: 'Image captured successfully from Raspberry Pi', type: 'success' });
+      };
+    } catch (error) {
+      setNotification({ visible: true, message: `Failed: ${error.message}`, type: 'error' });
+    }
+  };
+
+  const handleLiveCameraCapture = (capturedImage) => {
+    setSelectedImage(capturedImage);
+    setClassificationResult(null);
+    setShowLiveCamera(false);
+    
     setNotification({
       visible: true,
-      message: 'Raspberry Pi capture not implemented yet.',
-      type: 'info'
+      message: 'Image captured successfully from Raspberry Pi',
+      type: 'success'
     });
-    setShowSourceModal(false);
+  };
+
+  const handleLiveCameraClose = () => {
+    setShowLiveCamera(false);
   };
 
   const handleClassify = async () => {
@@ -154,6 +193,12 @@ export default function ClassifyImageScreen({ route, navigation }) {
         type={notification.type}
         actions={notification.actions}
         onClose={() => setNotification({ ...notification, visible: false })}
+      />
+
+      <LiveCameraView
+        visible={showLiveCamera}
+        onClose={handleLiveCameraClose}
+        onCapture={handleLiveCameraCapture}
       />
 
       <Modal visible={showSourceModal} transparent animationType="fade">

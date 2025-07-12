@@ -1,10 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
+import { unzipSync } from 'fflate';
 import React, { useEffect, useState } from 'react';
 import { Image, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import DropDownPicker from 'react-native-dropdown-picker';
+import { RPI_URL } from '../api/config';
 import { trainModel } from '../api/train';
+import LiveCameraView from '../components/LiveCameraView';
 import Notification from '../components/Notification';
 import { colors } from '../styles/them';
 
@@ -16,11 +20,41 @@ const categories = [
 ];
 
 const modelArchitectures = [
-  { value: '', label: 'Architecture', disabled: true },
-  { value: 'resnet50', label: 'ResNet50' },
+  { value: 'resnet50', label: 'Architecture' },
+  { value: 'resnet50', label: 'ResNet50 (defaullt)' },
   { value: 'googlenet', label: 'Googlenet' },
   { value: 'mobilenet_v2', label: 'Mobilenet_v2' },
 ];
+
+// Helper to unzip a zip file buffer and write images to FileSystem
+function uint8ToBase64(uint8) {
+  let binary = '';
+  for (let i = 0; i < uint8.length; i++) {
+    binary += String.fromCharCode(uint8[i]);
+  }
+  if (typeof btoa !== 'undefined') {
+    return btoa(binary);
+  } else {
+    // For Node.js or environments without btoa
+    return Buffer.from(binary, 'binary').toString('base64');
+  }
+}
+
+async function unzipWithFflate(zipPath, destDir) {
+  const zipData = await FileSystem.readAsStringAsync(zipPath, { encoding: FileSystem.EncodingType.Base64 });
+  const uint8 = Uint8Array.from(atob(zipData), c => c.charCodeAt(0));
+  const files = unzipSync(uint8);
+  await FileSystem.makeDirectoryAsync(destDir, { intermediates: true });
+  const imageUris = [];
+  for (const [name, data] of Object.entries(files)) {
+    if (name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.png')) {
+      const fileUri = `${destDir}/${name}`;
+      await FileSystem.writeAsStringAsync(fileUri, uint8ToBase64(data), { encoding: FileSystem.EncodingType.Base64 });
+      imageUris.push(fileUri);
+    }
+  }
+  return imageUris;
+}
 
 export default function TrainNewModelScreen({ navigation }) {
   const [modelName, setModelName] = useState('');
@@ -28,7 +62,7 @@ export default function TrainNewModelScreen({ navigation }) {
   const [category, setCategory] = useState('');
   const [classes, setClasses] = useState([
     { id: 1, name: '', images: [] },
-    { id: 2, name: '', images: [] }
+    { id: 2, name: '', images: [] },
   ]);
   const [loading, setLoading] = useState(false);
   const [notification, setNotification] = useState({ visible: false, message: '', type: 'info' });
@@ -39,30 +73,32 @@ export default function TrainNewModelScreen({ navigation }) {
   const [showMultiCaptureModal, setShowMultiCaptureModal] = useState(false);
   const [multiCaptureClassId, setMultiCaptureClassId] = useState(null);
   const [multiCaptureImages, setMultiCaptureImages] = useState([]);
+  const [showLiveCamera, setShowLiveCamera] = useState(false);
+  const [liveCameraClassId, setLiveCameraClassId] = useState(null);
+  const [showPiOptionsModal, setShowPiOptionsModal] = useState(false);
+  const [selectedClassId, setSelectedClassId] = useState(null);
+  const [captureMode, setCaptureMode] = useState(null); // 'single' or 'batch'
+  const [showBatchPreview, setShowBatchPreview] = useState(false);
+  const [pendingBatchClassId, setPendingBatchClassId] = useState(null);
+  const [pendingSingleImage, setPendingSingleImage] = useState(null);
+  const [liveCameraKey, setLiveCameraKey] = useState(0);
+  const [lastCapturedImage, setLastCapturedImage] = useState(null);
 
   useEffect(() => {
     if (notification.visible && notification.type !== 'loading') {
-      const timer = setTimeout(() => {
-        setNotification((prev) => ({ ...prev, visible: false }));
-      }, 2000);
+      const timer = setTimeout(() => setNotification(prev => ({ ...prev, visible: false })), 2000);
       return () => clearTimeout(timer);
     }
   }, [notification.visible, notification.type]);
 
   const handleAddClass = () => {
-    const newClassId = classes.length > 0 ? Math.max(...classes.map(c => c.id)) + 1 : 1;
-    setClasses([...classes, { id: newClassId, name: '', images: [] }]);
+    const newId = classes.length > 0 ? Math.max(...classes.map(c => c.id)) + 1 : 1;
+    setClasses([...classes, { id: newId, name: '', images: [] }]);
   };
 
-  const handleDeleteClass = (id) => {
-    setClasses(classes.filter(cls => cls.id !== id));
-  };
+  const handleDeleteClass = id => setClasses(classes.filter(c => c.id !== id));
 
-  const handlePickImages = (classId) => {
-    setShowSourceModalForClass(classId);
-  };
-
-  const handlePickFromGallery = async (classId) => {
+  const handlePickFromGallery = async classId => {
     setShowSourceModalForClass(null);
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -71,22 +107,14 @@ export default function TrainNewModelScreen({ navigation }) {
         quality: 1,
       });
       if (!result.canceled) {
-        setClasses(classes.map(cls =>
-          cls.id === classId
-            ? { ...cls, images: [...cls.images, ...result.assets.map(asset => asset.uri)] }
-            : cls
-        ));
+        setClasses(arr => arr.map(c => c.id === classId ? { ...c, images: [...c.images, ...result.assets.map(a => a.uri)] } : c));
       }
-    } catch (error) {
-      setNotification({
-        visible: true,
-        message: 'Failed to pick images. Please try again.',
-        type: 'error'
-      });
+    } catch {
+      setNotification({ visible: true, message: 'Failed to pick images', type: 'error' });
     }
   };
 
-  const handleTakePhoto = (classId) => {
+  const handleTakePhoto = classId => {
     setMultiCaptureClassId(classId);
     setMultiCaptureImages([]);
     setShowMultiCaptureModal(true);
@@ -100,27 +128,157 @@ export default function TrainNewModelScreen({ navigation }) {
         aspect: [4, 3],
         quality: 1,
       });
-      if (!result.canceled) {
-        setMultiCaptureImages(prev => [...prev, result.assets[0].uri]);
-      }
-    } catch (error) {
-      setNotification({
-        visible: true,
-        message: 'Failed to take photo. Please try again.',
-        type: 'error'
-      });
+      if (!result.canceled) setMultiCaptureImages(prev => [...prev, result.assets[0].uri]);
+    } catch {
+      setNotification({ visible: true, message: 'Failed to take photo', type: 'error' });
     }
   };
 
   const handleMultiCaptureDone = () => {
-    setClasses(classes.map(cls =>
-      cls.id === multiCaptureClassId
-        ? { ...cls, images: [...cls.images, ...multiCaptureImages] }
-        : cls
-    ));
+    setClasses(arr => arr.map(c => c.id === multiCaptureClassId ? { ...c, images: [...c.images, ...multiCaptureImages] } : c));
     setShowMultiCaptureModal(false);
     setMultiCaptureClassId(null);
     setMultiCaptureImages([]);
+  };
+
+  const handleCaptureFromRaspberryPi = (classId) => {
+    setShowSourceModalForClass(null);
+    setSelectedClassId(classId);
+    setShowPiOptionsModal(true);
+  };
+
+  const handleSingleImageCapture = () => {
+    console.log('handleSingleImageCapture: selectedClassId', selectedClassId);
+    setShowPiOptionsModal(false);
+    setLiveCameraClassId(selectedClassId);
+    setCaptureMode('single');
+    setLiveCameraKey(prev => prev + 1); // Force remount
+    setLastCapturedImage(null); // Reset last captured image
+    setShowLiveCamera(true);
+  };
+
+  const handleBatchCapture = () => {
+    setShowPiOptionsModal(false);
+    setPendingBatchClassId(selectedClassId);
+    setShowBatchPreview(true);
+  };
+
+  const handleStartBatchCapture = async () => {
+    setShowBatchPreview(false);
+    setLiveCameraClassId(pendingBatchClassId);
+    setCaptureMode('batch');
+    setShowLiveCamera(false); // Ensure not showing old modal
+    setNotification({ visible: true, message: 'Capturing 10 images from Raspberry Pi...', type: 'loading' });
+    try {
+      const response = await fetch(`${RPI_URL}/dataset`);
+      if (!response.ok) throw new Error('Failed to capture dataset from Raspberry Pi');
+      const blob = await response.blob();
+      const reader = new FileReader();
+      let didFinish = false;
+      const timeout = setTimeout(() => {
+        if (!didFinish) {
+          setNotification({ visible: true, message: 'Timed out reading images from Raspberry Pi', type: 'error' });
+          setPendingBatchClassId(null);
+        }
+      }, 20000); // 20 seconds timeout
+      reader.onerror = () => {
+        clearTimeout(timeout);
+        setNotification({ visible: true, message: 'Failed to read images from Raspberry Pi', type: 'error' });
+        setPendingBatchClassId(null);
+      };
+      reader.onload = async () => {
+        clearTimeout(timeout);
+        didFinish = true;
+        try {
+          const base64data = reader.result.split(',')[1];
+          const zipPath = `${FileSystem.cacheDirectory}dataset_images_${Date.now()}.zip`;
+          await FileSystem.writeAsStringAsync(zipPath, base64data, { encoding: FileSystem.EncodingType.Base64 });
+          // Unzip using fflate
+          const unzipDir = `${FileSystem.cacheDirectory}dataset_images_${Date.now()}`;
+          const imageUris = await unzipWithFflate(zipPath, unzipDir);
+          if (imageUris.length === 0) {
+            setNotification({ visible: true, message: 'No images found in the zip file', type: 'error' });
+            setPendingBatchClassId(null);
+            return;
+          }
+          setClasses(classes.map(cls =>
+            cls.id === pendingBatchClassId
+              ? { ...cls, images: [...cls.images, ...imageUris] }
+              : cls
+          ));
+          setNotification({ visible: true, message: `Captured ${imageUris.length} images from Raspberry Pi`, type: 'success' });
+          setPendingBatchClassId(null);
+        } catch (err) {
+          setNotification({ visible: true, message: `Failed to process images: ${err.message}`, type: 'error' });
+          setPendingBatchClassId(null);
+        }
+      };
+      reader.readAsDataURL(blob);
+    } catch (error) {
+      setNotification({ visible: true, message: `Failed: ${error.message}`, type: 'error' });
+      setPendingBatchClassId(null);
+    }
+  };
+
+  const handleLiveCameraCapture = async () => {
+    if (liveCameraClassId) {
+      if (captureMode === 'single') {
+        // Single image capture from RPi (identical to classify page)
+        setNotification({ visible: true, message: 'Capturing image from Raspberry Pi...', type: 'loading' });
+        try {
+          const response = await fetch(`${RPI_URL}/capture`);
+          if (!response.ok) throw new Error('Failed to capture image from Raspberry Pi');
+          const blob = await response.blob();
+          const fileReaderInstance = new FileReader();
+          fileReaderInstance.readAsDataURL(blob);
+          fileReaderInstance.onload = async () => {
+            const base64data = fileReaderInstance.result.split(',')[1];
+            const fileUri = `${FileSystem.cacheDirectory}rpi_capture_${Date.now()}.jpg`;
+            await FileSystem.writeAsStringAsync(fileUri, base64data, { encoding: FileSystem.EncodingType.Base64 });
+            setPendingSingleImage(fileUri); // Store temporarily
+            setLastCapturedImage(fileUri); // Track last captured image
+            setNotification({ visible: true, message: 'Image captured. Confirm to add to class.', type: 'success' });
+          };
+        } catch (error) {
+          setNotification({ visible: true, message: `Failed: ${error.message}`, type: 'error' });
+        }
+      } else if (captureMode === 'batch') {
+        // Batch capture from RPi
+        setNotification({ visible: true, message: 'Capturing 10 images from Raspberry Pi...', type: 'loading' });
+        try {
+          const response = await fetch(`${RPI_URL}/dataset`);
+          if (!response.ok) throw new Error('Failed to capture dataset from Raspberry Pi');
+          const blob = await response.blob();
+          // Save ZIP to file
+          const reader = new FileReader();
+          reader.readAsDataURL(blob);
+          reader.onload = async () => {
+            const base64data = reader.result.split(',')[1];
+            const zipPath = `${FileSystem.cacheDirectory}dataset_images_${Date.now()}.zip`;
+            await FileSystem.writeAsStringAsync(zipPath, base64data, { encoding: FileSystem.EncodingType.Base64 });
+            // Unzip
+            const unzipDir = `${FileSystem.cacheDirectory}dataset_images_${Date.now()}`;
+            await unzipWithFflate(zipPath, unzipDir);
+            const imageFiles = await FileSystem.readDirectoryAsync(unzipDir);
+            const imageUris = imageFiles.filter(f => f.endsWith('.jpg') || f.endsWith('.jpeg') || f.endsWith('.png')).map(f => `${unzipDir}/${f}`);
+            setClasses(classes.map(cls =>
+              cls.id === liveCameraClassId
+                ? { ...cls, images: [...cls.images, ...imageUris] }
+                : cls
+            ));
+            setNotification({ visible: true, message: `Captured ${imageUris.length} images from Raspberry Pi`, type: 'success' });
+          };
+        } catch (error) {
+          setNotification({ visible: true, message: `Failed: ${error.message}`, type: 'error' });
+        }
+      }
+    }
+  };
+
+  const handleLiveCameraClose = () => {
+    setShowLiveCamera(false);
+    setLiveCameraClassId(null);
+    setCaptureMode(null);
   };
 
   const handleMultiCaptureCancel = () => {
@@ -129,41 +287,27 @@ export default function TrainNewModelScreen({ navigation }) {
     setMultiCaptureImages([]);
   };
 
-  const handleCaptureFromRaspberryPi = (classId) => {
-    setNotification({
-      visible: true,
-      message: 'Raspberry Pi capture not implemented yet.',
-      type: 'info'
-    });
-    setShowSourceModalForClass(null);
+  const handlePickImages = (classId) => {
+    setShowSourceModalForClass(classId);
   };
 
   const handleTrain = async () => {
-    if (!modelName || !modelDescription || !category) {
-      setNotification({
-        visible: true,
-        message: 'Please fill in all fields',
-        type: 'error'
-      });
+    if (!modelName || !modelDescription ) {
+      setNotification({ visible: true, message: 'Please fill all fields', type: 'error' });
       return;
     }
-
-    const emptyClasses = classes.some(cls => cls.images.length === 0);
-    if (emptyClasses) {
-      setNotification({
-        visible: true,
-        message: 'Please add images for all classes',
-        type: 'error'
-      });
+    if (classes.some(c => c.images.length === 0)) {
+      setNotification({ visible: true, message: 'Add images for all classes', type: 'error' });
       return;
     }
+    const classesNames=classes.map(c=>c.name)
+    const namesSet= new Set(classesNames)
+   
+    if(namesSet.size!==classesNames.length) {setNotification({ visible: true, message: 'each class should have a unique name', type: 'error' });
+    return;}
 
     setLoading(true);
-    setNotification({
-      visible: true,
-      message: 'Training model, please wait...',
-      type: 'loading'
-    });
+    setNotification({ visible: true, message: 'Training model…', type: 'loading' });
     try {
       const formData = new FormData();
       formData.append('modelName', modelName);
@@ -171,59 +315,50 @@ export default function TrainNewModelScreen({ navigation }) {
       formData.append('category', category);
       formData.append('modelArch', modelArch);
       formData.append('classesCount', classes.length);
-
-      for (const [index, cls] of classes.entries()) {
-        formData.append(`class_name_${index}`, cls.name);
-        for (const [imageIndex, imageUri] of cls.images.entries()) {
-          console.log('Processing image URI:', imageUri);
-          const lower = imageUri.toLowerCase();
-          let format = 'jpeg';
-          if (lower.endsWith('.png')) format = 'png';
+      for (let i = 0; i < classes.length; i++) {
+        const cls = classes[i];
+        formData.append(`class_name_${i}`, cls.name);
+        for (let j = 0; j < cls.images.length; j++) {
+          const uri = cls.images[j];
+          const lower = uri.toLowerCase();
+          const format = lower.endsWith('.png') ? 'png' : 'jpeg';
           try {
-            // Try to manipulate the image
-            const manipulated = await ImageManipulator.manipulateAsync(
-              imageUri,
-              [],
-              { compress: 0.9, format: format === 'png' ? ImageManipulator.SaveFormat.PNG : ImageManipulator.SaveFormat.JPEG }
-            );
-            formData.append(`class_dataset_${index}`, {
-              uri: manipulated.uri,
-              type: format === 'png' ? 'image/png' : 'image/jpeg',
-              name: `image_${imageIndex}.${format}`,
-            });
-          } catch (err) {
-            // If manipulation fails, show a notification and skip this image
-            setNotification({
-              visible: true,
-              message: `Skipped image: ${imageUri.split('/').pop()} (could not process)`,
-              type: 'error'
-            });
-            // continue; // just skip this image and keep going
+            const manipulated = await ImageManipulator.manipulateAsync(uri, [], { compress: 0.9, format: format === 'png' ? ImageManipulator.SaveFormat.PNG : ImageManipulator.SaveFormat.JPEG });
+            formData.append(`class_dataset_${i}`, { uri: manipulated.uri, type: format === 'png' ? 'image/png' : 'image/jpeg', name: `image_${j}.${format}` });
+          } catch {
+            setNotification({ visible: true, message: `Skipped ${uri.split('/').pop()}`, type: 'error' });
           }
         }
       }
-
       const token = await AsyncStorage.getItem('token');
-      const data = await trainModel(formData, token);
-      setNotification({
-        visible: true,
-        message: 'Model trained successfully!',
-        type: 'success',
-        actions: [{
-          label: 'Browse Models',
-          type: 'primary',
-          onClick: () => navigation.navigate('Browse Models')
-        }]
-      });
-    } catch (error) {
-      setNotification({
-        visible: true,
-        message: error.message || 'Training failed',
-        type: 'error'
-      });
+      await trainModel(formData, token);
+      setNotification({ visible: true, message: 'Model trained!', type: 'success', actions: [{ label: 'Browse Models', type: 'primary', onClick: () => navigation.navigate('Browse Models') }] });
+    } catch (err) {
+      console.error(err);
+      setNotification({ visible: true, message: err.message || 'Training failed', type: 'error' });
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleConfirmSingleImage = () => {
+    console.log('handleConfirmSingleImage: liveCameraClassId', liveCameraClassId, 'selectedClassId', selectedClassId, 'pendingSingleImage', pendingSingleImage, 'classes', classes);
+    const classId = liveCameraClassId != null ? liveCameraClassId : selectedClassId;
+    if (pendingSingleImage && classId != null) {
+      setClasses(prevClasses =>
+        prevClasses.map(cls =>
+          String(cls.id) === String(classId)
+            ? { ...cls, images: [...cls.images, pendingSingleImage] }
+            : cls
+        )
+      );
+      setNotification({ visible: true, message: 'Image added to class', type: 'success' });
+    }
+    setPendingSingleImage(null);
+    setShowLiveCamera(false);
+    setLiveCameraClassId(null);
+    setCaptureMode(null);
+    setLastCapturedImage(null);
   };
 
   return (
@@ -239,6 +374,30 @@ export default function TrainNewModelScreen({ navigation }) {
           />
         </View>
       )}
+      <LiveCameraView
+        key={liveCameraKey}
+        visible={showLiveCamera}
+        onClose={handleLiveCameraClose}
+        onCapture={handleLiveCameraCapture}
+        mode={captureMode}
+        lastImage={lastCapturedImage}
+      />
+      <Modal visible={showBatchPreview} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { paddingVertical: 28 }]}> 
+            <Text style={[styles.modalTitle, { textAlign: 'center', marginBottom: 20 }]}>Live Preview - Raspberry Pi</Text>
+            <View style={{ width: '100%', alignItems: 'center', marginBottom: 8 }}>
+              <LiveCameraView visible={true} onClose={() => setShowBatchPreview(false)} mode="batch" onCapture={() => {}} />
+            </View>
+            <TouchableOpacity style={[styles.modalButton, { width: '100%', marginBottom: 10, paddingVertical: 12, borderRadius: 10, backgroundColor: '#4caf50' }]} onPress={handleStartBatchCapture}>
+              <Text style={[styles.modalButtonText, { fontSize: 16 }]}>Start 10-Image Capture</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.modalCancelButton, { width: '100%', marginTop: 8, paddingVertical: 12, borderRadius: 10 }]} onPress={() => setShowBatchPreview(false)}>
+              <Text style={[styles.modalCancelButtonText, { fontSize: 16 }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
       <ScrollView style={styles.container}>
         <Text style={styles.title}>Train New Model</Text>
         
@@ -414,6 +573,65 @@ export default function TrainNewModelScreen({ navigation }) {
           </View>
         </View>
       </Modal>
+      <Modal visible={showPiOptionsModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { paddingVertical: 28 }]}>
+            <Text style={[styles.modalTitle, { textAlign: 'center', marginBottom: 20 }]}>
+              Raspberry Pi Capture Options
+            </Text>
+            <View style={{ width: '100%', alignItems: 'center', marginBottom: 8 }}>
+              <TouchableOpacity 
+                style={[styles.modalButton, { width: '100%', marginBottom: 10, paddingVertical: 12, borderRadius: 10, backgroundColor: '#2196f3' }]} 
+                onPress={handleSingleImageCapture}
+              >
+                <Text style={[styles.modalButtonText, { fontSize: 16 }]}>📷  Single Image (Live Preview)</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalButton, { width: '100%', marginBottom: 10, paddingVertical: 12, borderRadius: 10, backgroundColor: '#4caf50' }]} 
+                onPress={handleBatchCapture}
+              >
+                <Text style={[styles.modalButtonText, { fontSize: 16 }]}>📸  Batch Capture (10 Images)</Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity 
+              style={[styles.modalCancelButton, { width: '100%', marginTop: 8, paddingVertical: 12, borderRadius: 10 }]} 
+              onPress={() => setShowPiOptionsModal(false)}
+            >
+              <Text style={[styles.modalCancelButtonText, { fontSize: 16 }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      {pendingSingleImage && (
+        <Modal visible={true} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { paddingVertical: 28 }]}> 
+              <Text style={[styles.modalTitle, { textAlign: 'center', marginBottom: 20 }]}>Confirm Image</Text>
+              <Image source={{ uri: pendingSingleImage }} style={{ width: 200, height: 200, borderRadius: 10, marginBottom: 20 }} />
+              <TouchableOpacity style={[styles.modalButton, { width: '100%', marginBottom: 10, paddingVertical: 12, borderRadius: 10, backgroundColor: '#4caf50' }]} onPress={handleConfirmSingleImage}>
+                <Text style={[styles.modalButtonText, { fontSize: 16 }]}>Use Photo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalButton, { width: '100%', marginBottom: 10, paddingVertical: 12, borderRadius: 10, backgroundColor: '#2196f3' }]} onPress={() => {
+                setPendingSingleImage(null);
+                setLastCapturedImage(null);
+                setShowLiveCamera(true);
+                setLiveCameraKey(prev => prev + 1);
+              }}>
+                <Text style={[styles.modalButtonText, { fontSize: 16 }]}>Retake</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalCancelButton, { width: '100%', marginTop: 8, paddingVertical: 12, borderRadius: 10 }]} onPress={() => {
+                setPendingSingleImage(null);
+                setLastCapturedImage(null);
+                setShowLiveCamera(false);
+                setLiveCameraClassId(null);
+                setCaptureMode(null);
+              }}>
+                <Text style={[styles.modalCancelButtonText, { fontSize: 16 }]}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      )}
     </View>
   );
 }
