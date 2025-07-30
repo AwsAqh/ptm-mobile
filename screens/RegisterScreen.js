@@ -48,7 +48,7 @@ export default function RegisterScreen({ navigation }) {
     }
     setLoading(true);
     try {
-      await register({ email, password });
+      await register({name, email, password });
       setNotification({
         visible: true,
         message: 'Registration successful! Redirecting to login...',

@@ -13,7 +13,7 @@ const CARD_WIDTH = (Dimensions.get('window').width / 2) - (CARD_MARGIN * 2.5);
 const CATEGORIES = [
   { value: 'All', label: 'All' },
   { value: 'plants', label: 'Plants' },
-  { value: 'animals_diseases', label: 'Animals diseases' },
+  { value: 'animals diseases', label: 'Animals diseases' },
   { value: 'entertainment', label: 'Entertainment' },
   { value: 'other', label: 'Other' },
 ];

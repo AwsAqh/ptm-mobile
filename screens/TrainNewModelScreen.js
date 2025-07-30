@@ -20,7 +20,7 @@ const categories = [
 ];
 
 const modelArchitectures = [
-  { value: 'resnet50', label: 'Architecture' },
+  { value: '', label: 'Architecture' },
   { value: 'resnet50', label: 'ResNet50 (defaullt)' },
   { value: 'googlenet', label: 'Googlenet' },
   { value: 'mobilenet_v2', label: 'Mobilenet_v2' },
@@ -96,7 +96,14 @@ export default function TrainNewModelScreen({ navigation }) {
     setClasses([...classes, { id: newId, name: '', images: [] }]);
   };
 
-  const handleDeleteClass = id => setClasses(classes.filter(c => c.id !== id));
+  const handleDeleteClass = id =>{ setClasses(classes.filter(c => c.id !== id).map(c=>{ if(c.id>id) return {...c,id : c.id-1} 
+  return c
+
+}))
+
+  
+
+  };
 
   const handlePickFromGallery = async classId => {
     setShowSourceModalForClass(null);
@@ -148,7 +155,7 @@ export default function TrainNewModelScreen({ navigation }) {
   };
 
   const handleSingleImageCapture = () => {
-    console.log('handleSingleImageCapture: selectedClassId', selectedClassId);
+  
     setShowPiOptionsModal(false);
     setLiveCameraClassId(selectedClassId);
     setCaptureMode('single');
@@ -292,12 +299,26 @@ export default function TrainNewModelScreen({ navigation }) {
   };
 
   const handleTrain = async () => {
+
+    
     if (!modelName || !modelDescription ) {
       setNotification({ visible: true, message: 'Please fill all fields', type: 'error' });
       return;
     }
+    if(category===''){
+      setNotification({ visible: true, message: 'Select a category', type: 'error' });
+      return;
+    }
     if (classes.some(c => c.images.length === 0)) {
       setNotification({ visible: true, message: 'Add images for all classes', type: 'error' });
+      return;
+    }
+    if(classes.some(c=>c.name==='')){
+      setNotification({ visible: true, message: 'Please fill in all classes names', type: 'error' });
+      return;
+    }
+    if(classes.some(c=>c.images.length<10)){
+      setNotification({ visible: true, message: 'Each class should have 10 images at least', type: 'error' });
       return;
     }
     const classesNames=classes.map(c=>c.name)
@@ -313,6 +334,8 @@ export default function TrainNewModelScreen({ navigation }) {
       formData.append('modelName', modelName);
       formData.append('modelDescription', modelDescription);
       formData.append('category', category);
+      if(modelArch===''){formData.append('modelArch', "resnet50");}
+      else
       formData.append('modelArch', modelArch);
       formData.append('classesCount', classes.length);
       for (let i = 0; i < classes.length; i++) {
@@ -342,7 +365,7 @@ export default function TrainNewModelScreen({ navigation }) {
   };
 
   const handleConfirmSingleImage = () => {
-    console.log('handleConfirmSingleImage: liveCameraClassId', liveCameraClassId, 'selectedClassId', selectedClassId, 'pendingSingleImage', pendingSingleImage, 'classes', classes);
+   
     const classId = liveCameraClassId != null ? liveCameraClassId : selectedClassId;
     if (pendingSingleImage && classId != null) {
       setClasses(prevClasses =>
@@ -423,9 +446,11 @@ export default function TrainNewModelScreen({ navigation }) {
           <View style={styles.pickerCompactContainer}>
             <Text style={styles.pickerLabel}>Architecture</Text>
             <DropDownPicker
+            
               open={modelArchOpen}
               value={modelArch}
               items={modelArchitectures.map(opt => ({
+                key:opt,
                 label: opt.label,
                 value: opt.value,
                 disabled: !!opt.disabled,
